@@ -1,41 +1,37 @@
 package main
 
-import "database/sql"
-import _ "github.com/go-sql-driver/mysql"
-import "os"
+import (
+	"os"
+	"strconv"
+
+	_ "github.com/go-sql-driver/mysql"
+)
+
 import "log"
-import "fmt"
 
 func main() {
-  dsn := os.Getenv("DSN")
-  db, err := sql.Open("mysql", dsn)
+	dsn := os.Getenv("DSN")
+	workersNumber := parseIntEnv("WORKERS")
+	accountsNumber := parseIntEnv("ACCOUNTS")
+	transactionsNumber := parseIntEnv("TRANSACTIONS")
 
-  if err != nil {
-    log.Fatal("Unable to connect to the database with parameters: %s\n", dsn)
-  }
+	config := Config{
+		Dsn:                dsn,
+		WorkersNumber:      workersNumber,
+		AccountsNumber:     accountsNumber,
+		TransactionsNumber: transactionsNumber,
+	}
 
-  rows, err := db.Query("SELECT id, balance FROM accounts")
-  if err != nil {
-	   log.Fatal(err)
-  }
+	dispatcher := NewDispatcher(config)
+	dispatcher.Run()
+}
 
-  for rows.Next() {
-  	var id int32
-    var balance int32
+func parseIntEnv(envName string) int {
+	value, err := strconv.Atoi(os.Getenv(envName))
 
-  	if err := rows.Scan(&id, &balance); err != nil {
-  		log.Fatal(err)
-  	}
+	if err != nil {
+		log.Fatalf("Wrong value of %s variable\n", envName)
+	}
 
-  	fmt.Printf("%d is %d\n", id, balance)
-  }
-
-  if err := rows.Err(); err != nil {
-  	log.Fatal(err)
-  }
-
-  err = db.Close()
-  if err != nil {
-    log.Fatal(err)
-  }
+	return value
 }

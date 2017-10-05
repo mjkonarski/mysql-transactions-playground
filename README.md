@@ -4,5 +4,7 @@ Go programs to test different transactions and locking concepts in MySQL
 ## Running
 
 ```
-DSN="root@/transactions_playground" go run main.go
+mysql < schema.sql
+go build && go install
+DSN="root@/transactions_playground" WORKERS=10 ACCOUNTS=2 TRANSACTIONS=1000 mysql-transactions-playground
 ```
