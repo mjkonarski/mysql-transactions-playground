@@ -1,22 +1,26 @@
 package main
 
-import "math/rand"
-import "time"
-import "database/sql"
-import "log"
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"math/rand"
+	"time"
+)
 
-const MAX_AMOUNT = 1000
+const MAX_Balance = 1000
 
 type Config struct {
-	Dsn                string
-	WorkersNumber      int
-	AccountsNumber     int
-	TransactionsNumber int
+	Dsn             string
+	WorkersNumber   int
+	AccountsNumber  int
+	TransfersNumber int
 }
 
 type Dispatcher struct {
-	Config Config
-	Db     *sql.DB
+	Config  Config
+	Db      *sql.DB
+	Workers []*Worker
 }
 
 func NewDispatcher(config Config) *Dispatcher {
@@ -27,14 +31,30 @@ func NewDispatcher(config Config) *Dispatcher {
 
 func (dispatcher *Dispatcher) Run() {
 	dispatcher.connectToDb()
-	dispatcher.PrepareAccounts()
+	dispatcher.prepareAccounts()
+
+	transfers := dispatcher.generateTransfers()
+	// generatedSum := dispatcher.sumTransfers(transfers)
+	checkingWorker := NewCheckingWorker(dispatcher.Config.Dsn)
+
+	checkingChannel := make(chan bool)
+	go checkingWorker.Run(checkingChannel)
+	dispatcher.runWorkers(transfers)
+	close(checkingChannel)
+	fetchedSum := dispatcher.fetchSumFromDB()
+
+	if fetchedSum == 0 {
+		fmt.Println("Sum in the DB is correct!")
+	} else {
+		fmt.Println("Sum in the DB is incorrect!")
+	}
 }
 
 func (dispatcher *Dispatcher) connectToDb() {
 	db, err := sql.Open("mysql", dispatcher.Config.Dsn)
 
 	if err != nil {
-		log.Fatal("Unable to connect to the DB: %s", dispatcher.Config.Dsn)
+		log.Fatalf("Unable to connect to the DB: %s", dispatcher.Config.Dsn)
 	} else {
 		log.Print("Successfully connected to the db")
 	}
@@ -42,7 +62,7 @@ func (dispatcher *Dispatcher) connectToDb() {
 	dispatcher.Db = db
 }
 
-func (dispatcher *Dispatcher) PrepareAccounts() {
+func (dispatcher *Dispatcher) prepareAccounts() {
 	_, err := dispatcher.Db.Exec("TRUNCATE accounts")
 
 	if err != nil {
@@ -55,8 +75,8 @@ func (dispatcher *Dispatcher) PrepareAccounts() {
 		log.Fatal(err)
 	}
 
-	for accountId := 1; accountId <= dispatcher.Config.AccountsNumber; accountId++ {
-		_, err := stmt.Exec(accountId, 0)
+	for accountID := 1; accountID <= dispatcher.Config.AccountsNumber; accountID++ {
+		_, err := stmt.Exec(accountID, 0)
 
 		if err != nil {
 			log.Fatal(err)
@@ -67,12 +87,12 @@ func (dispatcher *Dispatcher) PrepareAccounts() {
 }
 
 func (dispatcher *Dispatcher) generateTransfers() []Transfer {
-	transfers := make([]Transfer, dispatcher.Config.TransactionsNumber)
+	transfers := make([]Transfer, dispatcher.Config.TransfersNumber)
 
 	source := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(source)
 
-	for i := 0; i < dispatcher.Config.TransactionsNumber; i++ {
+	for i := 0; i < dispatcher.Config.TransfersNumber; i++ {
 		from := r.Intn(dispatcher.Config.AccountsNumber) + 1
 		to := r.Intn(dispatcher.Config.AccountsNumber) + 1
 
@@ -80,44 +100,69 @@ func (dispatcher *Dispatcher) generateTransfers() []Transfer {
 			to = r.Intn(dispatcher.Config.AccountsNumber) + 1
 		}
 
-		amount := r.Intn(MAX_AMOUNT) + 1
+		Balance := r.Intn(MAX_Balance) + 1
 		transfer := Transfer{
-			From:   from,
-			To:     to,
-			Amount: amount,
+			From:    from,
+			To:      to,
+			Balance: Balance,
 		}
 
-		transfers = append(transfers, transfer)
+		transfers[i] = transfer
 	}
+
+	log.Printf("Created %d trasfers", len(transfers))
 
 	return transfers
 }
 
-// db, err := sql.Open("mysql", dsn)
-//
-//
-//
-// rows, err := db.Query("SELECT id, balance FROM accounts")
-// if err != nil {
-//    log.Fatal(err)
-// }
-//
-// for rows.Next() {
-//   var id int32
-//   var balance int32
-//
-//   if err := rows.Scan(&id, &balance); err != nil {
-//     log.Fatal(err)
-//   }
-//
-//   fmt.Printf("%d is %d\n", id, balance)
-// }
-//
-// if err := rows.Err(); err != nil {
-//   log.Fatal(err)
-// }
-//
-// err = db.Close()
-// if err != nil {
-//   log.Fatal(err)
-// }
+func (dispatcher *Dispatcher) sumTransfers(transfers []Transfer) map[int]int {
+	sums := make(map[int]int)
+
+	for accountID := 1; accountID <= dispatcher.Config.AccountsNumber; accountID++ {
+		sums[accountID] = 0
+	}
+
+	for _, transfer := range transfers {
+		sums[transfer.From] -= transfer.Balance
+		sums[transfer.To] += transfer.Balance
+	}
+
+	return sums
+}
+
+func (dispatcher *Dispatcher) runWorkers(transfers []Transfer) {
+	dispatcher.Workers = make([]*Worker, dispatcher.Config.WorkersNumber)
+	workerTransfers := make(map[int][]Transfer)
+	for workerID := 0; workerID <= dispatcher.Config.WorkersNumber; workerID++ {
+		workerTransfers[workerID] = make([]Transfer, 0)
+	}
+
+	for transferID, transfer := range transfers {
+		workerID := transferID % dispatcher.Config.WorkersNumber
+		workerTransfers[workerID] = append(workerTransfers[workerID], transfer)
+	}
+
+	workerFinishChannel := make(chan bool, dispatcher.Config.WorkersNumber)
+
+	for workerID := 0; workerID < dispatcher.Config.WorkersNumber; workerID++ {
+		worker := NewWorker(dispatcher.Config.Dsn)
+		go worker.Run(workerTransfers[workerID], workerFinishChannel)
+	}
+
+	log.Printf("Ran %d workers", dispatcher.Config.WorkersNumber)
+
+	for workerID := 0; workerID < dispatcher.Config.WorkersNumber; workerID++ {
+		<-workerFinishChannel
+	}
+}
+
+func (dispatcher *Dispatcher) fetchSumFromDB() int {
+	var sum int
+	err := dispatcher.Db.QueryRow("SELECT SUM(balance) FROM accounts").
+		Scan(&sum)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return sum
+}

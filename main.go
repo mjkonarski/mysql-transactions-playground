@@ -13,13 +13,13 @@ func main() {
 	dsn := os.Getenv("DSN")
 	workersNumber := parseIntEnv("WORKERS")
 	accountsNumber := parseIntEnv("ACCOUNTS")
-	transactionsNumber := parseIntEnv("TRANSACTIONS")
+	transfersNumber := parseIntEnv("TRANSFERS")
 
 	config := Config{
-		Dsn:                dsn,
-		WorkersNumber:      workersNumber,
-		AccountsNumber:     accountsNumber,
-		TransactionsNumber: transactionsNumber,
+		Dsn:             dsn,
+		WorkersNumber:   workersNumber,
+		AccountsNumber:  accountsNumber,
+		TransfersNumber: transfersNumber,
 	}
 
 	dispatcher := NewDispatcher(config)
